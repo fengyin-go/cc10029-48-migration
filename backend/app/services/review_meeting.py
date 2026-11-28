@@ -68,3 +68,15 @@ class ReviewMeetingService(BaseModuleService):
             "pending": True,
             "abnormal": False,
         })
+        # 派生待办进入收件箱（幂等），并携带纪要原编号/来源，便于切换后对照。
+        from app.services.workflow import workflow_service
+        origin = store.find("review_meeting", meeting_id) or {}
+        workflow_service.ensure_todo(
+            origin_module="review_meeting",
+            origin_ref=meeting_id,
+            target_module="improve_task",
+            entry_id=new_id,
+            title=f"会议决议：{theme}",
+            source_code=origin.get("source_code"),
+            source_ref=origin.get("source_ref"),
+        )

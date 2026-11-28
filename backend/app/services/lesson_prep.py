@@ -63,3 +63,15 @@ class LessonPrepService(BaseModuleService):
             "pending": True,
             "abnormal": False,
         })
+        # 评议邀请进入收件箱（幂等），保留原备课出处，教师从评议待办即可接到邀请。
+        from app.services.workflow import workflow_service
+        origin = store.find("lesson_prep", prep_id) or {}
+        workflow_service.ensure_todo(
+            origin_module="lesson_prep",
+            origin_ref=prep_id,
+            target_module="peer_review",
+            entry_id=new_id,
+            title=f"备课记录 #{prep_id} 触发的同行评议邀请",
+            source_code=origin.get("source_code"),
+            source_ref=origin.get("source_ref"),
+        )

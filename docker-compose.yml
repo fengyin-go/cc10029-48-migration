@@ -5,6 +5,11 @@ services:
       - "8000:8000"
     environment:
       - APP_ENV=local
+      # SQLite 数据库与切换回执放到挂载卷，容器重建后数据不丢。
+      - APP_DB_PATH=/srv/data/workbench.sqlite3
+      - APP_RECEIPT_DIR=/srv/data/migration
+    volumes:
+      - workbench-data:/srv/data
   frontend:
     build: ./frontend
     ports:
@@ -14,3 +19,6 @@ services:
       VITE_PROXY_TARGET: http://backend:8000
     depends_on:
       - backend
+
+volumes:
+  workbench-data:

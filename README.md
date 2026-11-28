@@ -15,12 +15,16 @@
 │   ├── src/api/              统一请求封装
 │   └── vite.config.ts        dev server 配置（open: false）
 ├── backend/                  FastAPI（Python） 后端
-│   ├── app/routers/resource.py  通用查询/导出/登记/动作接口
+│   ├── app/routers/resource.py  通用查询/导出/登记/动作接口（原业务入口，保持不变）
+│   ├── app/routers/cutover.py   持久化切换与工作流接口（迁移/回执/分发/待办/认领/回滚）
 │   ├── app/services/<key>.py    每个模块独立领域逻辑
 │   ├── app/services/base.py     共享服务骨架
-│   └── app/store.py          内存数据仓库与示例数据
+│   ├── app/services/migration.py 存量迁移与切换回执
+│   ├── app/services/workflow.py  幂等分发、待办收件箱、认领资格
+│   ├── app/database.py       SQLite 连接、建表与底层读写
+│   └── app/store.py          数据仓库：写回式容器 + 切换台账，底层落 SQLite
 ├── .gitignore
-└── docker-compose.yml
+└── docker-compose.yml        backend 挂载 workbench-data 卷持久化 SQLite
 ```
 
 ## 启动
@@ -78,6 +82,53 @@ npm run dev
   `frontend/src/domain/<模块>.ts`，用于承载真实业务差异并维持36题位容量。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+
+## 持久化与存量切换
+
+数据仓库已从进程内内存台账迁移到 SQLite（仅用标准库 `sqlite3`，无新增依赖）。
+原业务入口 `/api/{module}`、领域服务与前端调用方式保持不变；`store.py` 用写回式
+容器把服务里的原地修改自动落库，并新增四张切换台账表。
+
+- 数据库位置：环境变量 `APP_DB_PATH`，默认 `backend/data/workbench.sqlite3`；
+  切换回执与备份目录：`APP_RECEIPT_DIR`，默认 `backend/data/migration/`。
+- 首次启动且数据库为空时自动灌入示例数据；删除数据库文件即可回到全新状态。
+
+### 切换接口（均在 `/api` 下，与资源路由并存）
+
+| 接口 | 作用 |
+| --- | --- |
+| `POST /api/migration/imports` | 导入旧工作台导出的存量记录，返回可核对的切换回执；验证不通过自动回滚 |
+| `GET  /api/migration/batches` | 迁移批次列表 |
+| `GET  /api/migration/batches/{id}` | 查询某批次切换回执（记录数、关联结果、来源保留情况） |
+| `POST /api/migration/batches/{id}/verify` | 对已导入批次重新核对记录数与关联 |
+| `POST /api/migration/batches/{id}/rollback` | 按批次回滚，恢复服务；已受理的认领/评议台账保留 |
+| `POST /api/dispatch` | 带 `dispatch_key` 的幂等动作分发，中断重试取回原结果，不重复派单 |
+| `GET  /api/dispatch` | 分发台账查询 |
+| `GET  /api/todos` | 待办收件箱（带认领资格、业务状态和原出处） |
+| `GET  /api/{module}/{id}/eligibility` | 任务入口与待办入口共用的认领资格 |
+| `POST /api/claims` | 幂等受理；已受理重试返回原结果，两边入口状态同步 |
+| `GET  /api/claims` | 认领台账查询 |
+
+### 切换日在途问题的处理约定
+
+- 导入保留纪要、诊改任务、备课评议的**原编号与来源**（`source_code`/`source_ref` 落列），
+  回执给出每个模块的记录数对照与 `meeting:`/`lesson_prep:` 等跨模块关联解析结果。
+- 待认领事项按确定性幂等键写入 `todo_inbox`，重复导入或重复触发只更新不新增，
+  不会因停用旧内存服务而全部重发。
+- 分发与认领分别记 `dispatch_ledger`/`claim_ledger`：分发者中断后用同一幂等键重试，
+  直接取回首次处理结果；同一份待办受理后，任务入口与待办入口同步变为不可再领。
+- 导入前做 SQLite 在线备份；验证不通过自动回滚，也可按批次人工回滚。
+  回滚只撤回本批业务记录，已经向操作员确认受理的诊改任务和评议邀请台账保留，
+  重新导入后自动接续，仍可继续办理。
+
+## 测试
+
+```bash
+cd backend
+.venv/bin/python -m pytest -q
+```
+
+测试使用独立临时 SQLite 库（见 `tests/conftest.py`），不污染工作区数据。
 
 领域：应用开发
 子方向：web前端/全栈开发

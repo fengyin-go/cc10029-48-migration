@@ -5,14 +5,26 @@
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import database
 from app.config import settings
 from app.routers import ROUTERS
 from app.store import store
 
-app = FastAPI(title="教学诊改协同台", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # 启动：确保表结构就绪、内存视图与 SQLite 一致；业务入口保持不变。
+    database.init_schema()
+    store.bootstrap()
+    yield
+
+
+app = FastAPI(title="教学诊改协同台", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,10 +34,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/api/health")
 def health() -> dict[str, object]:
-    """健康检查：确认服务已经监听、示例数据已经就绪。"""
-    return {"ok": True, "app": settings.app_name, "modules": len(store.module_names())}
+    """健康检查：确认服务已经监听、持久化数据库与业务模块就绪。"""
+    return {
+        "ok": True,
+        "app": settings.app_name,
+        "version": "2.0.0",
+        "storage": "sqlite",
+        "db_path": database.get_db_path(),
+        "modules": len(store.module_names()),
+        "entries": database.count_entries(),
+    }
 
 
 @app.get("/api/overview")
